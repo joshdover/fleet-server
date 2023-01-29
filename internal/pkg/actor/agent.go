@@ -14,8 +14,20 @@ type Agent struct {
 	id string
 }
 
-func NewAgent(id string) *Agent {
-	return &Agent{id: id}
+func NewAgent() gen.ServerBehavior {
+	return &Agent{}
+}
+
+func (a *Agent) Init(sp *gen.ServerProcess, args ...etf.Term) error {
+	a.id = args[0].(string)
+
+	fmt.Printf("Started new process\n\tPid: %s\n\tName: %q\n\tParent: %s\n\tArgs:%#v\n",
+	sp.Self(),
+	sp.Name(),
+	sp.Parent().Self(),
+	args)
+
+	return nil
 }
 
 func (a *Agent) GetId(process *gen.ServerProcess) (string, error) {
