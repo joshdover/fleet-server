@@ -22,10 +22,10 @@ func (a *Agent) Init(sp *gen.ServerProcess, args ...etf.Term) error {
 	a.id = args[0].(string)
 
 	fmt.Printf("Started new process\n\tPid: %s\n\tName: %q\n\tParent: %s\n\tArgs:%#v\n",
-	sp.Self(),
-	sp.Name(),
-	sp.Parent().Self(),
-	args)
+		sp.Self(),
+		sp.Name(),
+		sp.Parent().Self(),
+		args)
 
 	return nil
 }
@@ -41,15 +41,16 @@ func (a *Agent) GetId(process *gen.ServerProcess) (string, error) {
 
 func (a *Agent) HandleCall(process *gen.ServerProcess, from gen.ServerFrom, message etf.Term) (etf.Term, gen.ServerStatus) {
 	switch message.(etf.Atom) {
-		case GET_ID:
-			return a.id, gen.ServerStatusOK
+	case GET_ID:
+		return a.id, gen.ServerStatusOK
 	}
 	return nil, gen.ServerStatusOK
 }
 
 func (a *Agent) HandleDirect(process *gen.ServerProcess, ref etf.Ref, message interface{}) (interface{}, gen.DirectStatus) {
 	switch message.(type) {
-		case etf.Term: {
+	case etf.Term:
+		{
 			reply, err := process.Behavior().(gen.ServerBehavior).HandleCall(process, gen.ServerFrom{Ref: ref}, message.(etf.Term))
 			if err != nil {
 				return "", fmt.Errorf("error during HandleCall: %s", err)

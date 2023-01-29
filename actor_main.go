@@ -20,22 +20,14 @@ func main() {
 		panic(err)
 	}
 
-	// a := actor.NewAgent("foo")
-	// p, err := node.Spawn("example_server", gen.ProcessOptions{}, a)
-	// if err != nil {
-	// 	panic(err)
-	// }
-
-	demoSup := actor.CreateDemoSup()
-	sup, err := node.Spawn("demoSup", gen.ProcessOptions{}, demoSup)
+	agentController := actor.CreateAgentController()
+	sup, err := node.Spawn("agentController", gen.ProcessOptions{}, agentController)
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println("Started supervisor process", sup.Self())
+	fmt.Println("Started control process", sup.Self())
 
-	http.HandleFunc("/", func (w http.ResponseWriter, r *http.Request) {
-		// TODO this doesn't work yet because we need a GenServer to receive messages
-		// to receive comamnds to create children. Seems like supervisor should delegate to behavior?
+	http.HandleFunc("/add", func(w http.ResponseWriter, r *http.Request) {
 		_, err := sup.Direct(actor.AddAgentMessage{Id: "123"})
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -43,13 +35,12 @@ func main() {
 			return
 		}
 
-		// fmt.Fprintf(w, "Hello, %q", r.URL.Path)
-		// cnt, err := sup.Direct(actor.CountAgentMessage{})
-		// if err != nil {
-		// 	panic(err.Error())
-		// }
+		cnt, err := sup.Direct(actor.CountAgentMessage{})
+		if err != nil {
+			panic(err.Error())
+		}
 
-		// fmt.Fprintf(w, "Reply from the agent: %v", cnt)
+		fmt.Fprintf(w, "Reply from the agent: %v", cnt)
 	})
 
 	go http.ListenAndServe(":8220", nil)

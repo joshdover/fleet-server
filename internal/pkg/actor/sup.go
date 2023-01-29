@@ -7,79 +7,119 @@ import (
 	"github.com/ergo-services/ergo/gen"
 )
 
-func CreateDemoSup() gen.SupervisorBehavior {
-	return &demoSup{}
-}
-
-type demoSup struct {
-	gen.Supervisor
-}
-
-type demoSupServer struct {
+type agentController struct {
 	gen.Server
 }
 
-func (dss *demoSupServer) HandleCall(process *gen.ServerProcess, from gen.ServerFrom, message etf.Term) (etf.Term, gen.ServerStatus) {
-	(*process).Parent().Behavior().(gen.Supervisor).StartChild(*process, "demoServer01", "01")
+type controlState struct {
+	sup        *supAgents
+	supProcess gen.Process
+	agents     []etf.Pid
 }
 
-func (ds *demoSup) Init(args ...etf.Term) (gen.SupervisorSpec, error) {
-	spec := gen.SupervisorSpec{
-		Name: "demoAppSup",
-		Children: []gen.SupervisorChildSpec{
-			{
-				Name:  "demoServer01",
-				Child: NewAgent(),
-				Args: []etf.Term{"01"},
-			},
-			// {
-			// 	Name:  "demoServer02",
-			// 	Child: NewAgent(),
-			// 	Args: []etf.Term{"02"},
-			// },
-		},
-		Strategy: gen.SupervisorStrategy{
-			Type:      gen.SupervisorStrategyOneForAll,
-			Intensity: 2,
-			Period:    5,
-			Restart:   gen.SupervisorStrategyRestartTemporary,
-		},
+func CreateAgentController() *agentController {
+	return &agentController{}
+}
+
+func (c *agentController) Init(process *gen.ServerProcess, args ...etf.Term) error {
+
+	sup := &supAgents{}
+	supOptions := gen.ProcessOptions{
+		Context: process.Context(), // inherited context to make sup process be hard linked with the control one
 	}
-	return spec, nil
-}
+	supProcess, err := process.Spawn("", supOptions, sup)
+	if err != nil {
+		return fmt.Errorf("error during subProcess Spawn: %s", err)
+	}
+	state := &controlState{
+		sup:        sup,
+		supProcess: supProcess,
+	}
 
-func (ds *demoSup) AddAgent(supervisor *gen.Process, id string) error { 
-	// _, err := ds.StartChild(*supervisor, fmt.Sprintf("agent %s", a.id))
-	_, err := ds.StartChild(*supervisor, "demoServer01", id)
-	return err
+	process.State = state
+	return nil
 }
 
 type AddAgentMessage struct {
 	Id string
 }
 
-type CountAgentMessage struct {}
+type CountAgentMessage struct{}
 
-func (ds *demoSup) HandleDirect(process *gen.Process, ref etf.Ref, message interface{}) (interface{}, gen.DirectStatus) { 
-	println("direct")
+func (c *agentController) HandleCall(p *gen.ServerProcess, from gen.ServerFrom, message etf.Term) (etf.Term, gen.ServerStatus) {
+	fmt.Printf("agentController.HandleCall: %v, %v", from, message)
+	state := p.State.(*controlState)
+
 	switch m := message.(type) {
-		case AddAgentMessage:
-			err := ds.AddAgent(process, m.Id)
-			if err != nil {
-				return "", fmt.Errorf("error during AddAgent: %s", err)
-			}
+	// Add an agent
+	case AddAgentMessage:
+		child, err := state.sup.StartChild(state.supProcess, "agent", m.Id)
+		if err != nil {
+			return nil, err
+		}
+		state.agents = append(state.agents, child.Self())
 
-			return nil, gen.DirectStatusOK
-		case CountAgentMessage:
-			pids, err := (*process).Children()
-			if err != nil {
-				return nil, fmt.Errorf("error during Children: %s", err)
-			}
+		// monitor process in order to restart it on termination
+		p.MonitorProcess(child.Self())
 
-			return len(pids), gen.DirectStatusOK
+		return nil, gen.DirectStatusOK
+	// Get count of agents
+	case CountAgentMessage:
+		return len(state.agents), gen.DirectStatusOK
 	}
 
-	(*process).Parent()
+	return nil, fmt.Errorf("unknown message type")
+}
 
-	return "", fmt.Errorf("unknown message type: %T", message)
+func (c *agentController) HandleDirect(p *gen.ServerProcess, ref etf.Ref, message interface{}) (interface{}, gen.DirectStatus) {
+	// Forward to call
+	fmt.Printf("agentController.HandleDirect: %v, %v", ref, message)
+	return c.HandleCall(p, gen.ServerFrom{Ref: ref}, message)
+}
+
+func (c *agentController) HandleInfo(process *gen.ServerProcess, message etf.Term) gen.ServerStatus {
+	state := process.State.(*controlState)
+	switch m := message.(type) {
+	case gen.MessageDown:
+		for i, pid := range state.agents {
+			if pid != m.Pid {
+				continue
+			}
+			// restart terminated agent
+			child, err := state.sup.StartChild(state.supProcess, "agent")
+			if err != nil {
+				return err
+			}
+			process.MonitorProcess(child.Self())
+			state.agents[i] = child.Self()
+			break
+		}
+	default:
+		// TODO: hard failure?
+		fmt.Printf("unknown request: %#v\n", m)
+	}
+
+	return gen.ServerStatusOK
+}
+
+type supAgents struct {
+	gen.Supervisor
+}
+
+func (s *supAgents) Init(args ...etf.Term) (gen.SupervisorSpec, error) {
+	return gen.SupervisorSpec{
+		Name: "sup_agents",
+		Children: []gen.SupervisorChildSpec{
+			gen.SupervisorChildSpec{
+				Name:  "agent",
+				Child: &Agent{},
+			},
+		},
+		Strategy: gen.SupervisorStrategy{
+			Type:      gen.SupervisorStrategySimpleOneForOne,
+			Intensity: 5,
+			Period:    5,
+			Restart:   gen.SupervisorStrategyRestartTemporary,
+		},
+	}, nil
 }
