@@ -20,22 +20,48 @@ func main() {
 		panic(err)
 	}
 
-	agentController := actor.CreateAgentController()
-	sup, err := node.Spawn("agentController", gen.ProcessOptions{}, agentController)
+	agentController := actor.CreateAgentSupervisor()
+	sup, err := node.Spawn("AgentSupervisor", gen.ProcessOptions{}, agentController)
 	if err != nil {
 		panic(err)
 	}
 	fmt.Println("Started control process", sup.Self())
 
 	http.HandleFunc("/add", func(w http.ResponseWriter, r *http.Request) {
-		_, err := sup.Direct(actor.AddAgentMessage{Id: "123"})
+		cnt, err := sup.Direct(actor.CountAgentMessage{})
+		if err != nil {
+			panic(err.Error())
+		}
+
+		_, err = sup.Direct(actor.AddAgentMessage{Id: string(cnt.(int))})
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			fmt.Fprintf(w, "direct error: %v", err.Error())
 			return
 		}
 
+		cnt, err = sup.Direct(actor.CountAgentMessage{})
+		if err != nil {
+			panic(err.Error())
+		}
+
+		fmt.Fprintf(w, "Reply from the agent: %v", cnt)
+	})
+
+	http.HandleFunc("/remove", func(w http.ResponseWriter, r *http.Request) {
 		cnt, err := sup.Direct(actor.CountAgentMessage{})
+		if err != nil {
+			panic(err.Error())
+		}
+
+		_, err = sup.Direct(actor.AddAgentMessage{Id: string(cnt.(int))})
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintf(w, "direct error: %v", err.Error())
+			return
+		}
+
+		cnt, err = sup.Direct(actor.CountAgentMessage{})
 		if err != nil {
 			panic(err.Error())
 		}

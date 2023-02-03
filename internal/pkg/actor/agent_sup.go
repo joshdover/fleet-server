@@ -7,21 +7,21 @@ import (
 	"github.com/ergo-services/ergo/gen"
 )
 
-type agentController struct {
+type agentSup struct {
 	gen.Server
 }
 
 type controlState struct {
 	sup        *supAgents
 	supProcess gen.Process
-	agents     []etf.Pid
+	agents map[string]etf.Pid
 }
 
-func CreateAgentController() *agentController {
-	return &agentController{}
+func CreateAgentSupervisor() *agentSup {
+	return &agentSup{}
 }
 
-func (c *agentController) Init(process *gen.ServerProcess, args ...etf.Term) error {
+func (c *agentSup) Init(process *gen.ServerProcess, args ...etf.Term) error {
 
 	sup := &supAgents{}
 	supOptions := gen.ProcessOptions{
@@ -34,6 +34,7 @@ func (c *agentController) Init(process *gen.ServerProcess, args ...etf.Term) err
 	state := &controlState{
 		sup:        sup,
 		supProcess: supProcess,
+		agents: make(map[string]etf.Pid),
 	}
 
 	process.State = state
@@ -44,9 +45,13 @@ type AddAgentMessage struct {
 	Id string
 }
 
+type RemoveAgentMessage struct {
+	Id string
+}
+
 type CountAgentMessage struct{}
 
-func (c *agentController) HandleCall(p *gen.ServerProcess, from gen.ServerFrom, message etf.Term) (etf.Term, gen.ServerStatus) {
+func (c *agentSup) HandleCall(p *gen.ServerProcess, from gen.ServerFrom, message etf.Term) (etf.Term, gen.ServerStatus) {
 	fmt.Printf("agentController.HandleCall: %v, %v", from, message)
 	state := p.State.(*controlState)
 
@@ -57,12 +62,29 @@ func (c *agentController) HandleCall(p *gen.ServerProcess, from gen.ServerFrom, 
 		if err != nil {
 			return nil, err
 		}
-		state.agents = append(state.agents, child.Self())
+		// state.agents = append(state.agents, child.Self())
+		state.agents[m.Id] = child.Self()
 
 		// monitor process in order to restart it on termination
 		p.MonitorProcess(child.Self())
 
 		return nil, gen.DirectStatusOK
+
+	// Remove an agent
+	case RemoveAgentMessage:
+		child := state.agents[m.Id]
+		childP := p.ProcessByPid(child)
+		if childP == nil {
+			return nil, fmt.Errorf("agent process not found")
+		}
+		if err := childP.Exit("remove agent"); err != nil {
+			return nil, fmt.Errorf("error during agent process exit: %s", err)
+		}
+
+		delete(state.agents, m.Id)
+
+		return nil, gen.DirectStatusOK
+
 	// Get count of agents
 	case CountAgentMessage:
 		return len(state.agents), gen.DirectStatusOK
@@ -71,27 +93,27 @@ func (c *agentController) HandleCall(p *gen.ServerProcess, from gen.ServerFrom, 
 	return nil, fmt.Errorf("unknown message type")
 }
 
-func (c *agentController) HandleDirect(p *gen.ServerProcess, ref etf.Ref, message interface{}) (interface{}, gen.DirectStatus) {
+func (c *agentSup) HandleDirect(p *gen.ServerProcess, ref etf.Ref, message interface{}) (interface{}, gen.DirectStatus) {
 	// Forward to call
 	fmt.Printf("agentController.HandleDirect: %v, %v", ref, message)
 	return c.HandleCall(p, gen.ServerFrom{Ref: ref}, message)
 }
 
-func (c *agentController) HandleInfo(process *gen.ServerProcess, message etf.Term) gen.ServerStatus {
+func (c *agentSup) HandleInfo(process *gen.ServerProcess, message etf.Term) gen.ServerStatus {
 	state := process.State.(*controlState)
 	switch m := message.(type) {
 	case gen.MessageDown:
-		for i, pid := range state.agents {
+		for id, pid := range state.agents {
 			if pid != m.Pid {
 				continue
 			}
 			// restart terminated agent
-			child, err := state.sup.StartChild(state.supProcess, "agent")
+			child, err := state.sup.StartChild(state.supProcess, "agent", id)
 			if err != nil {
 				return err
 			}
 			process.MonitorProcess(child.Self())
-			state.agents[i] = child.Self()
+			state.agents[id] = child.Self()
 			break
 		}
 	default:
@@ -110,7 +132,7 @@ func (s *supAgents) Init(args ...etf.Term) (gen.SupervisorSpec, error) {
 	return gen.SupervisorSpec{
 		Name: "sup_agents",
 		Children: []gen.SupervisorChildSpec{
-			gen.SupervisorChildSpec{
+			{
 				Name:  "agent",
 				Child: &Agent{},
 			},

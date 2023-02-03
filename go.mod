@@ -10,6 +10,7 @@ require (
 	github.com/elastic/elastic-agent-system-metrics v0.4.4
 	github.com/elastic/go-elasticsearch/v8 v8.5.0
 	github.com/elastic/go-ucfg v0.8.6
+	github.com/ergo-services/ergo v1.999.220
 	github.com/gofrs/uuid v4.3.1+incompatible
 	github.com/google/go-cmp v0.5.9
 	github.com/hashicorp/go-cleanhttp v0.5.2
@@ -46,7 +47,6 @@ require (
 	github.com/elastic/go-sysinfo v1.9.0 // indirect
 	github.com/elastic/go-windows v1.0.1 // indirect
 	github.com/elastic/gosigar v0.14.2 // indirect
-	github.com/ergo-services/ergo v1.999.220 // indirect
 	github.com/fatih/color v1.13.0 // indirect
 	github.com/golang/glog v1.0.0 // indirect
 	github.com/golang/protobuf v1.5.2 // indirect
