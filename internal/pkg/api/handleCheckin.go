@@ -138,6 +138,16 @@ func (ct *CheckinT) handleCheckin(zlog *zerolog.Logger, w http.ResponseWriter, r
 	return ct.ProcessRequest(*zlog, w, r, start, agent, newVer)
 }
 
+type CheckinRequestExt struct {
+	CheckinRequest
+	agent *model.Agent
+	start time.Time
+	ver string
+	rawMeta []byte
+	rawComponents []byte
+	seqno sqn.SeqNo
+}
+
 func (ct *CheckinT) ProcessRequest(zlog zerolog.Logger, w http.ResponseWriter, r *http.Request, start time.Time, agent *model.Agent, ver string) error {
 
 	ctx := r.Context()
@@ -177,20 +187,39 @@ func (ct *CheckinT) ProcessRequest(zlog zerolog.Logger, w http.ResponseWriter, r
 		return err
 	}
 
+	reqExt := CheckinRequestExt{
+		req,
+		agent,
+		start,
+		ver,
+		rawMeta,	
+		rawComponents,	
+		seqno,
+	}
+
+	resp, err := ct.BeginPolling(ctx, zlog, reqExt)
+	if err != nil {
+		return err
+	}
+
+	return ct.writeResponse(zlog, w, r, resp)
+}
+
+func (ct *CheckinT) BeginPolling(ctx context.Context, zlog zerolog.Logger, req CheckinRequestExt) (*CheckinResponse, error) {
 	// Subscribe to actions dispatcher
-	aSub := ct.ad.Subscribe(agent.Id, seqno)
+	aSub := ct.ad.Subscribe(req.agent.Id, req.seqno)
 	defer ct.ad.Unsubscribe(aSub)
 	actCh := aSub.Ch()
 
 	// Subscribe to policy manager for changes on PolicyId > policyRev
-	sub, err := ct.pm.Subscribe(agent.Id, agent.PolicyID, agent.PolicyRevisionIdx, agent.PolicyCoordinatorIdx)
+	sub, err := ct.pm.Subscribe(req.agent.Id, req.agent.PolicyID, req.agent.PolicyRevisionIdx, req.agent.PolicyCoordinatorIdx)
 	if err != nil {
-		return fmt.Errorf("subscribe policy monitor: %w", err)
+		return nil, fmt.Errorf("subscribe policy monitor: %w", err)
 	}
 	defer func() {
 		err := ct.pm.Unsubscribe(sub)
 		if err != nil {
-			zlog.Error().Err(err).Str("policy_id", agent.PolicyID).Msg("unable to unsubscribe from policy")
+			zlog.Error().Err(err).Str("policy_id", req.agent.PolicyID).Msg("unable to unsubscribe from policy")
 		}
 	}()
 
@@ -198,16 +227,16 @@ func (ct *CheckinT) ProcessRequest(zlog zerolog.Logger, w http.ResponseWriter, r
 	tick := time.NewTicker(ct.cfg.Timeouts.CheckinTimestamp)
 	defer tick.Stop()
 
-	setupDuration := time.Since(start)
+	setupDuration := time.Since(req.start)
 	pollDuration, jitter := calcPollDuration(zlog, ct.cfg, setupDuration)
 
 	zlog.Debug().
 		Str("status", req.Status).
-		Str("seqNo", seqno.String()).
+		Str("seqNo", req.seqno.String()).
 		Dur("setupDuration", setupDuration).
 		Dur("jitter", jitter).
 		Dur("pollDuration", pollDuration).
-		Uint64("bodyCount", readCounter.Count()).
+		// Uint64("bodyCount", readCounter.Count()).
 		Msg("checkin start long poll")
 
 	// Chill out for a bit. Long poll.
@@ -215,9 +244,9 @@ func (ct *CheckinT) ProcessRequest(zlog zerolog.Logger, w http.ResponseWriter, r
 	defer longPoll.Stop()
 
 	// Initial update on checkin, and any user fields that might have changed
-	err = ct.bc.CheckIn(agent.Id, req.Status, req.Message, rawMeta, rawComponents, seqno, ver)
+	err = ct.bc.CheckIn(req.agent.Id, req.Status, req.Message, req.rawMeta, req.rawComponents, req.seqno, req.ver)
 	if err != nil {
-		zlog.Error().Err(err).Str("agent_id", agent.Id).Msg("checkin failed")
+		zlog.Error().Err(err).Str("agent_id", req.agent.Id).Msg("checkin failed")
 	}
 
 	// Initial fetch for pending actions
@@ -227,29 +256,29 @@ func (ct *CheckinT) ProcessRequest(zlog zerolog.Logger, w http.ResponseWriter, r
 	)
 
 	// Check agent pending actions first
-	pendingActions, err := ct.fetchAgentPendingActions(ctx, seqno, agent.Id)
+	pendingActions, err := ct.fetchAgentPendingActions(ctx, req.seqno, req.agent.Id)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	pendingActions = filterActions(agent.Id, pendingActions)
-	actions, ackToken = convertActions(agent.Id, pendingActions)
+	pendingActions = filterActions(req.agent.Id, pendingActions)
+	actions, ackToken = convertActions(req.agent.Id, pendingActions)
 
 	if len(actions) == 0 {
 	LOOP:
 		for {
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				return nil, ctx.Err()
 			case acdocs := <-actCh:
 				var acs []ActionResp
-				acdocs = filterActions(agent.Id, acdocs)
-				acs, ackToken = convertActions(agent.Id, acdocs)
+				acdocs = filterActions(req.agent.Id, acdocs)
+				acs, ackToken = convertActions(req.agent.Id, acdocs)
 				actions = append(actions, acs...)
 				break LOOP
 			case policy := <-sub.Output():
-				actionResp, err := processPolicy(ctx, zlog, ct.bulker, agent.Id, policy)
+				actionResp, err := processPolicy(ctx, zlog, ct.bulker, req.agent.Id, policy)
 				if err != nil {
-					return fmt.Errorf("processPolicy: %w", err)
+					return nil, fmt.Errorf("processPolicy: %w", err)
 				}
 				actions = append(actions, *actionResp)
 				break LOOP
@@ -257,9 +286,9 @@ func (ct *CheckinT) ProcessRequest(zlog zerolog.Logger, w http.ResponseWriter, r
 				zlog.Trace().Msg("fire long poll")
 				break LOOP
 			case <-tick.C:
-				err := ct.bc.CheckIn(agent.Id, req.Status, req.Message, nil, rawComponents, nil, ver)
+				err := ct.bc.CheckIn(req.agent.Id, req.Status, req.Message, nil, req.rawComponents, nil, req.ver)
 				if err != nil {
-					zlog.Error().Err(err).Str("agent_id", agent.Id).Msg("checkin failed")
+					zlog.Error().Err(err).Str("agent_id", req.agent.Id).Msg("checkin failed")
 				}
 			}
 		}
@@ -276,16 +305,16 @@ func (ct *CheckinT) ProcessRequest(zlog zerolog.Logger, w http.ResponseWriter, r
 			Msg("Action delivered to agent on checkin")
 	}
 
-	resp := CheckinResponse{
+	resp := &CheckinResponse{
 		AckToken: ackToken,
 		Action:   "checkin",
 		Actions:  actions,
 	}
 
-	return ct.writeResponse(zlog, w, r, resp)
+	return resp, nil
 }
 
-func (ct *CheckinT) writeResponse(zlog zerolog.Logger, w http.ResponseWriter, r *http.Request, resp CheckinResponse) error {
+func (ct *CheckinT) writeResponse(zlog zerolog.Logger, w http.ResponseWriter, r *http.Request, resp *CheckinResponse) error {
 
 	payload, err := json.Marshal(&resp)
 	if err != nil {
