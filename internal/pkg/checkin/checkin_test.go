@@ -5,7 +5,7 @@
 //go:build !integration
 // +build !integration
 
-package api
+package checkin
 
 import (
 	"encoding/json"

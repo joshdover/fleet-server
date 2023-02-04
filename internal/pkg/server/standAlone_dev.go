@@ -18,6 +18,7 @@ import (
 
 	"github.com/elastic/fleet-server/v7/internal/pkg/api"
 	"github.com/elastic/fleet-server/v7/internal/pkg/bulk"
+	"github.com/elastic/fleet-server/v7/internal/pkg/checkin"
 	"github.com/elastic/fleet-server/v7/internal/pkg/dl"
 	"github.com/elastic/fleet-server/v7/internal/pkg/es"
 	"github.com/elastic/fleet-server/v7/internal/pkg/model"
@@ -87,7 +88,7 @@ func (f *Fleet) standAloneCheckin(agent *model.Agent, ct *api.CheckinT) runFunc 
 				return fmt.Errorf("standAloneCheckin ctx is done: %w", ctx.Err())
 			case ts := <-tick.C:
 				log.Info().Msg("self-checkin start")
-				body := api.CheckinRequest{
+				body := checkin.CheckinRequest{
 					Status:   "HEALTHY",
 					AckToken: ackToken,
 					// TODO Metadata?
@@ -104,7 +105,7 @@ func (f *Fleet) standAloneCheckin(agent *model.Agent, ct *api.CheckinT) runFunc 
 					log.Warn().Msg("self-checkin returned no body")
 					continue
 				}
-				rBody := api.CheckinResponse{}
+				rBody := checkin.CheckinResponse{}
 				err = json.Unmarshal(resp.b.Bytes(), &rBody)
 				if err != nil {
 					log.Error().Err(err).Msg("self-checkin unable to unmarshal response")

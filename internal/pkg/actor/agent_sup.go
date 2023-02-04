@@ -9,6 +9,7 @@ import (
 
 type agentSup struct {
 	gen.Server
+	p *gen.ServerProcess
 }
 
 type controlState struct {
@@ -22,6 +23,7 @@ func CreateAgentSupervisor() *agentSup {
 }
 
 func (c *agentSup) Init(process *gen.ServerProcess, args ...etf.Term) error {
+	c.p = process
 
 	sup := &supAgents{}
 	supOptions := gen.ProcessOptions{
@@ -62,13 +64,25 @@ func (c *agentSup) HandleCall(p *gen.ServerProcess, from gen.ServerFrom, message
 		if err != nil {
 			return nil, err
 		}
-		// state.agents = append(state.agents, child.Self())
 		state.agents[m.Id] = child.Self()
 
 		// monitor process in order to restart it on termination
 		p.MonitorProcess(child.Self())
 
 		return nil, gen.DirectStatusOK
+
+	case GetNextUpdate:
+		cp, ok := state.agents[m.Req.Agent.Id]
+		if !ok {
+			return nil, fmt.Errorf("agent not found")
+		}
+
+		res, err := AgentGetNextUpdate(p, cp, m)
+		if err != nil {
+			return nil, fmt.Errorf("error during AgentGetNextUpdate: %s", err)
+		}
+
+		return res, nil
 
 	// Remove an agent
 	case RemoveAgentMessage:

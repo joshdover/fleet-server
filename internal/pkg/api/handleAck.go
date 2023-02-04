@@ -22,6 +22,7 @@ import (
 
 	"github.com/elastic/fleet-server/v7/internal/pkg/bulk"
 	"github.com/elastic/fleet-server/v7/internal/pkg/cache"
+	"github.com/elastic/fleet-server/v7/internal/pkg/checkin"
 	"github.com/elastic/fleet-server/v7/internal/pkg/config"
 	"github.com/elastic/fleet-server/v7/internal/pkg/dl"
 	"github.com/elastic/fleet-server/v7/internal/pkg/es"
@@ -265,7 +266,7 @@ func (ack *AckT) handleAckEvents(ctx context.Context, zlog zerolog.Logger, agent
 		// The unenroll and upgrade acks might overwrite it later
 		setResult(n, http.StatusOK)
 
-		if action.Type == TypeUpgrade {
+		if action.Type == checkin.TypeUpgrade {
 			if err := ack.handleUpgrade(ctx, zlog, agent, ev); err != nil {
 				setError(n, err)
 				log.Error().Err(err).Msg("handle upgrade event")
@@ -273,7 +274,7 @@ func (ack *AckT) handleAckEvents(ctx context.Context, zlog zerolog.Logger, agent
 			}
 		}
 
-		if ev.Error == "" && action.Type == TypeUnenroll {
+		if ev.Error == "" && action.Type == checkin.TypeUnenroll {
 			unenrollIdxs = append(unenrollIdxs, n)
 		}
 	}

@@ -15,8 +15,12 @@ import (
 	"time"
 
 	"github.com/elastic/elastic-agent-client/v7/pkg/client"
+	"github.com/elastic/fleet-server/v7/internal/pkg/actor"
 	"github.com/elastic/fleet-server/v7/internal/pkg/model"
 	"github.com/elastic/fleet-server/v7/internal/pkg/state"
+	"github.com/ergo-services/ergo"
+	"github.com/ergo-services/ergo/gen"
+	"github.com/ergo-services/ergo/node"
 
 	"go.elastic.co/apm"
 	apmtransport "go.elastic.co/apm/transport"
@@ -424,6 +428,20 @@ func (f *Fleet) runSubsystems(ctx context.Context, cfg *config.Config, g *errgro
 		return fmt.Errorf("failed to run subsystems: %w", err)
 	}
 
+	// Start ergo node and agent controller
+	ergoNode, err := ergo.StartNodeWithContext(ctx, "demo@127.0.0.1", "cookie", node.Options{})
+	if err != nil {
+		return fmt.Errorf("failed to start ergo node: %w", err)
+	}
+	log.Info().Msgf("started ergo node: %v", ergoNode.MakeRef())
+
+	agentController := actor.CreateAgentSupervisor()
+	sup, err := ergoNode.Spawn("AgentSupervisor", gen.ProcessOptions{}, agentController)
+	if err != nil {
+		return fmt.Errorf("failed to start ergo agent supervisor: %w", err)
+	}
+	log.Info().Msgf("started ergo agent supervisor: %v", sup.Self())
+
 	// Run scheduler for periodic GC/cleanup
 	gcCfg := cfg.Inputs[0].Server.GC
 	sched, err := scheduler.New(gc.Schedules(bulker, gcCfg.ScheduleInterval, gcCfg.CleanupAfterExpiredInterval))
@@ -494,7 +512,7 @@ func (f *Fleet) runSubsystems(ctx context.Context, cfg *config.Config, g *errgro
 	bc := checkin.NewBulk(bulker)
 	g.Go(loggedRunFunc(ctx, "Bulk checkin", bc.Run))
 
-	ct := api.NewCheckinT(f.verCon, &cfg.Inputs[0].Server, f.cache, bc, pm, am, ad, tr, bulker)
+	ct := api.NewCheckinT(f.verCon, &cfg.Inputs[0].Server, f.cache, bc, pm, am, ad, tr, bulker, &sup)
 	et, err := api.NewEnrollerT(f.verCon, &cfg.Inputs[0].Server, bulker, f.cache)
 	if err != nil {
 		return err
@@ -510,6 +528,11 @@ func (f *Fleet) runSubsystems(ctx context.Context, cfg *config.Config, g *errgro
 	ut := api.NewUploadT(&cfg.Inputs[0].Server, bulker, monCli, f.cache) // uses no-retry client for bufferless chunk upload
 
 	router := api.NewRouter(&cfg.Inputs[0].Server, bulker, ct, et, at, ack, st, ut, sm, tracer, f.bi)
+
+	g.Go(loggedRunFunc(ctx, "Ergo server", func(ctx context.Context) error {
+		ergoNode.Wait()
+		return nil
+	}))
 
 	g.Go(loggedRunFunc(ctx, "Http server", func(ctx context.Context) error {
 		return router.Run(ctx)
